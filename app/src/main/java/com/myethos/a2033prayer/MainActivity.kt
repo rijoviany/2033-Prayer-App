@@ -2,7 +2,6 @@ package com.myethos.a2033prayer
 
 import android.Manifest
 import android.app.AlarmManager
-import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -30,10 +29,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var appBarConfiguration: AppBarConfiguration
     private lateinit var binding: ActivityMainBinding
     private lateinit var notificationHelper: NotificationHelper
+    private val handler = Handler(Looper.getMainLooper())
+    private var countdownRunnable: Runnable? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
+        testNotifications()
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
@@ -60,16 +61,16 @@ class MainActivity : AppCompatActivity() {
 
         scheduleDailyReminder()
 
-        // Register countdown receiver
+        // Register initial countdown trigger receiver
         registerReceiver(
-            countdownReceiver,
-            IntentFilter("PRAYER_COUNTDOWN"), RECEIVER_NOT_EXPORTED
+            initialCountdownReceiver,
+            IntentFilter("PRAYER_COUNTDOWN_TRIGGER"), Context.RECEIVER_NOT_EXPORTED
         )
     }
 
     private fun scheduleDailyReminder() {
         val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val intent = Intent("PRAYER_COUNTDOWN")
+        val intent = Intent("PRAYER_COUNTDOWN_TRIGGER")
         val pendingIntent = PendingIntent.getBroadcast(
             this, 0, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -94,39 +95,76 @@ class MainActivity : AppCompatActivity() {
             AlarmManager.INTERVAL_DAY,
             pendingIntent
         )
+
+        // FOR TESTING - You can use this to trigger the notification immediately
+        // startCountdown()
     }
 
-    private val countdownReceiver = object : BroadcastReceiver() {
+    // This receiver is triggered exactly at 20:30 to start the countdown
+    private val initialCountdownReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            val calendar = Calendar.getInstance()
-            val currentHour = calendar.get(Calendar.HOUR_OF_DAY)
-            val currentMinute = calendar.get(Calendar.MINUTE)
-            val currentSecond = calendar.get(Calendar.SECOND)
+            // Start the countdown process
+            startCountdown()
+        }
+    }
 
-            when {
-                // At exactly 20:33, show the prayer notification
-                currentHour == 20 && currentMinute == 33 && currentSecond == 0 -> {
-                    notificationHelper.showPrayerNotification()
+    private fun startCountdown() {
+        // Cancel any existing countdown
+        stopCountdown()
 
-                    // Schedule a handler to remove the notification after a reasonable time if not clicked
-                    Handler(Looper.getMainLooper()).postDelayed({
-                        // This would just cancel if already dismissed
-                        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
-                            .cancel(1002) // Using the PRAYER_NOTIFICATION_ID from NotificationHelper
-                    }, 15 * 60 * 1000) // 15 minutes
+        // Create and start a new countdown
+        countdownRunnable = object : Runnable {
+            override fun run() {
+                updateCountdown()
+                // Schedule next update in 1 second
+                handler.postDelayed(this, 1000)
+            }
+        }
+
+        // Start the countdown immediately
+        handler.post(countdownRunnable!!)
+    }
+
+    private fun stopCountdown() {
+        countdownRunnable?.let {
+            handler.removeCallbacks(it)
+            countdownRunnable = null
+        }
+    }
+
+    private fun updateCountdown() {
+        val calendar = Calendar.getInstance()
+        val currentHour = calendar.get(Calendar.HOUR_OF_DAY)
+        val currentMinute = calendar.get(Calendar.MINUTE)
+        val currentSecond = calendar.get(Calendar.SECOND)
+
+        when {
+            // At exactly 20:33, show the prayer notification
+            currentHour == 20 && currentMinute == 33 && currentSecond == 0 -> {
+                notificationHelper.showPrayerNotification()
+                // Stop the countdown updates
+                stopCountdown()
+            }
+
+            // Between 20:30 and 20:32:59, show and update the countdown
+            currentHour == 20 && currentMinute in 30..32 -> {
+                // Calculate total seconds remaining until 20:33:00
+                val targetCalendar = Calendar.getInstance().apply {
+                    set(Calendar.HOUR_OF_DAY, 20)
+                    set(Calendar.MINUTE, 33)
+                    set(Calendar.SECOND, 0)
                 }
 
-                // Between 20:30 and 20:33, show and update the countdown
-                currentHour == 20 && currentMinute in 30..32 -> {
-                    val remainingMinutes = 32 - currentMinute
-                    val remainingSeconds = 59 - currentSecond
-                    notificationHelper.showCountdownNotification(remainingMinutes, remainingSeconds)
+                val totalSecondsRemaining = (targetCalendar.timeInMillis - calendar.timeInMillis) / 1000
+                val minutesRemaining = totalSecondsRemaining / 60
+                val secondsRemaining = totalSecondsRemaining % 60
 
-                    // Schedule next update in 1 second
-                    Handler(Looper.getMainLooper()).postDelayed({
-                        sendBroadcast(Intent("PRAYER_COUNTDOWN"))
-                    }, 1000)
-                }
+                notificationHelper.showCountdownNotification(minutesRemaining.toInt(), secondsRemaining.toInt())
+            }
+
+            // If outside the time window, stop the countdown
+            else -> {
+                stopCountdown()
             }
         }
     }
@@ -155,6 +193,12 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        unregisterReceiver(countdownReceiver)
+        stopCountdown()
+        unregisterReceiver(initialCountdownReceiver)
+    }
+
+    // Add this method for debugging/testing
+    fun testNotifications() {
+        startCountdown()
     }
 }
